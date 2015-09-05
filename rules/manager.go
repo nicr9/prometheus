@@ -217,10 +217,16 @@ func (m *Manager) queueAlertNotifications(rule *AlertingRule, timestamp model.Ti
 			return result
 		}
 
+		// Expand all the alert labels.
+		for k, v := range aa.Labels {
+			expanded := expand(string(v))
+			aa.Labels[k] = model.LabelValue(expanded)
+		}
+
 		notifications = append(notifications, &notification.NotificationReq{
 			Summary:     expand(rule.summary),
 			Description: expand(rule.description),
-			Runbook:     rule.runbook,
+			Runbook:     expand(rule.runbook),
 			Labels: aa.Labels.Merge(model.LabelSet{
 				alertNameLabel: model.LabelValue(rule.Name()),
 			}),
