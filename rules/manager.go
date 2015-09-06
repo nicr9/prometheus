@@ -191,52 +191,60 @@ func (m *Manager) queueAlertNotifications(rule *AlertingRule, timestamp model.Ti
 			continue
 		}
 
-		// Provide the alert information to the template.
-		l := map[string]string{}
-		for k, v := range aa.Labels {
-			l[string(k)] = string(v)
-		}
-		tmplData := struct {
-			Labels map[string]string
-			Value  float64
-		}{
-			Labels: l,
-			Value:  float64(aa.Value),
-		}
-		// Inject some convenience variables that are easier to remember for users
-		// who are not used to Go's templating system.
-		defs := "{{$labels := .Labels}}{{$value := .Value}}"
-
-		expand := func(text string) string {
-			tmpl := template.NewTemplateExpander(defs+text, "__alert_"+rule.Name(), tmplData, timestamp, m.queryEngine, m.externalURL.Path)
-			result, err := tmpl.Expand()
-			if err != nil {
-				result = err.Error()
-				log.Warnf("Error expanding alert template %v with data '%v': %v", rule.Name(), tmplData, err)
-			}
-			return result
-		}
-
-		// Expand all the alert labels.
-		for k, v := range aa.Labels {
-			expanded := expand(string(v))
-			aa.Labels[k] = model.LabelValue(expanded)
-		}
-
-		notifications = append(notifications, &notification.NotificationReq{
-			Summary:     expand(rule.summary),
-			Description: expand(rule.description),
-			Runbook:     expand(rule.runbook),
-			Labels: aa.Labels.Merge(model.LabelSet{
-				alertNameLabel: model.LabelValue(rule.Name()),
-			}),
-			Value:        aa.Value,
-			ActiveSince:  aa.ActiveSince.Time(),
-			RuleString:   rule.String(),
-			GeneratorURL: m.externalURL.String() + strutil.GraphLinkForExpression(rule.vector.String()),
-		})
+		notes := m.expandAlerts(aa, rule, timestamp)
+		notifications = append(
+			notifications,
+			&notes,
+		)
 	}
 	m.notificationHandler.SubmitReqs(notifications)
+}
+
+func (m *Manager) expandAlerts(alert Alert, rule *AlertingRule, timestamp model.Time) notification.NotificationReq {
+	// Provide the alert information to the template.
+	l := map[string]string{}
+	for k, v := range alert.Labels {
+		l[string(k)] = string(v)
+	}
+	tmplData := struct {
+		Labels map[string]string
+		Value  float64
+	}{
+		Labels: l,
+		Value:  float64(alert.Value),
+	}
+	// Inject some convenience variables that are easier to remember for users
+	// who are not used to Go's templating system.
+	defs := "{{$labels := .Labels}}{{$value := .Value}}"
+
+	expand := func(text string) string {
+		tmpl := template.NewTemplateExpander(defs+text, "__alert_"+rule.Name(), tmplData, timestamp, m.queryEngine, m.externalURL.Path)
+		result, err := tmpl.Expand()
+		if err != nil {
+			result = err.Error()
+			log.Warnf("Error expanding alert template %v with data '%v': %v", rule.Name(), tmplData, err)
+		}
+		return result
+	}
+
+	// Expand all the alert labels.
+	for k, v := range alert.Labels {
+		expanded := expand(string(v))
+		alert.Labels[k] = model.LabelValue(expanded)
+	}
+
+	return notification.NotificationReq{
+		Summary:     expand(rule.summary),
+		Description: expand(rule.description),
+		Runbook:     expand(rule.runbook),
+		Labels: alert.Labels.Merge(model.LabelSet{
+			alertNameLabel: model.LabelValue(rule.Name()),
+		}),
+		Value:        alert.Value,
+		ActiveSince:  alert.ActiveSince.Time(),
+		RuleString:   rule.String(),
+		GeneratorURL: m.externalURL.String() + strutil.GraphLinkForExpression(rule.vector.String()),
+	}
 }
 
 func (m *Manager) runIteration() {

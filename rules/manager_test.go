@@ -15,6 +15,7 @@ package rules
 
 import (
 	"fmt"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -180,4 +181,33 @@ func TestTransferAlertState(t *testing.T) {
 	if ar := m.rules[1].(*AlertingRule); !reflect.DeepEqual(ar.activeAlerts[0], alert) {
 		t.Fatalf("alert state was not restored")
 	}
+}
+
+func TestExpandAlerts(t *testing.T) {
+	u, err := url.Parse("https://www.google.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(&ManagerOptions{ExternalURL: u})
+
+	alert := &Alert{
+		Name:  "testalert",
+		State: StateFiring,
+	}
+
+	expr, err := promql.ParseExpr(`http_requests{group="canary", job="app-server"} < 100`)
+	if err != nil {
+		t.Fatalf("Unable to parse alert expression: %s", err)
+	}
+	rule := NewAlertingRule(
+		"HTTPRequestRateLow",
+		expr,
+		time.Minute,
+		model.LabelSet{"severity": "critical"},
+		"summary", "description", "runbook",
+	)
+
+	time := model.Time(0)
+
+	m.expandAlerts(*alert, rule, time)
 }
