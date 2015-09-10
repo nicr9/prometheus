@@ -190,9 +190,15 @@ func TestExpandAlerts(t *testing.T) {
 	}
 	m := NewManager(&ManagerOptions{ExternalURL: u})
 
+	labels := map[model.LabelName]model.LabelValue{
+		"summary":     "This",
+		"description": "is",
+		"runbook":     "Sparta!",
+	}
 	alert := &Alert{
-		Name:  "testalert",
-		State: StateFiring,
+		Name:   "testalert",
+		Labels: labels,
+		State:  StateFiring,
 	}
 
 	expr, err := promql.ParseExpr(`http_requests{group="canary", job="app-server"} < 100`)
@@ -204,10 +210,42 @@ func TestExpandAlerts(t *testing.T) {
 		expr,
 		time.Minute,
 		model.LabelSet{"severity": "critical"},
-		"summary", "description", "runbook",
+		"summary: {{index $labels \"summary\"}}",
+		"description: {{index $labels \"description\"}}",
+		"runbook: {{index $labels \"runbook\"}}",
 	)
 
 	time := model.Time(0)
 
-	m.expandAlerts(*alert, rule, time)
+	// Expected fields
+	expSummary := "summary: This"
+	expDescription := "description: is"
+	expRunbook := "runbook: Sparta!"
+
+	notification := m.expandAlerts(*alert, rule, time)
+
+	if notification.Summary != expSummary {
+		t.Fatalf(
+			"Summary expansion failed: '%s' != '%s'",
+			notification.Summary,
+			expSummary,
+		)
+	}
+
+	if notification.Description != expDescription {
+		t.Fatalf(
+			"Description expansion failed: '%s' != '%s'",
+			notification.Description,
+			expDescription,
+		)
+	}
+
+	if notification.Runbook != expRunbook {
+		t.Fatalf(
+			"Runbook expansion failed: '%s' != '%s'",
+			notification.Runbook,
+			expRunbook,
+		)
+	}
+
 }
