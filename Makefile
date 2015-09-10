@@ -35,6 +35,10 @@ docker:
 
 tarball: $(ARCHIVE)
 
+$(GOPATH):
+	mkdir -p $(GOPATH)
+	cp -a $(MAKEFILE_DIR)/vendor/ $(GOPATH)/src
+
 $(ARCHIVE): build
 	mkdir -p $(ARCHIVEDIR)
 	cp -a prometheus promtool consoles console_libraries $(ARCHIVEDIR)
@@ -65,6 +69,7 @@ clean:
 	-find . -type f -name '.#*' -exec rm '{}' ';'
 
 $(SELFLINK): $(GOPATH)
+	mkdir -p `dirname $@`
 	ln -s $(MAKEFILE_DIR) $@
 
 dependencies: $(GOCC) | $(SELFLINK)
