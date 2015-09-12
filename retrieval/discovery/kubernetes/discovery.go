@@ -14,8 +14,6 @@
 package kubernetes
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -117,6 +115,7 @@ func (kd *Discovery) Sources() []string {
 		log.Errorf("Unable to list Kubernetes nodes: %s", err)
 		return []string{}
 	}
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		log.Errorf("Unable to list Kubernetes nodes. Unexpected response: %d %s", res.StatusCode, res.Status)
 		return []string{}
@@ -145,6 +144,7 @@ func (kd *Discovery) Sources() []string {
 		log.Errorf("Unable to list Kubernetes services: %s", err)
 		return []string{}
 	}
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		log.Errorf("Unable to list Kubernetes services. Unexpected response: %d %s", res.StatusCode, res.Status)
 		return []string{}
@@ -353,6 +353,7 @@ func (kd *Discovery) watchNodes(events chan interface{}, done <-chan struct{}, r
 			log.Errorf("Failed to watch nodes: %s", err)
 			return
 		}
+		defer res.Body.Close()
 		if res.StatusCode != http.StatusOK {
 			log.Errorf("Failed to watch nodes: %d", res.StatusCode)
 			return
@@ -394,6 +395,7 @@ func (kd *Discovery) watchServices(events chan interface{}, done <-chan struct{}
 			log.Errorf("Failed to watch services: %s", err)
 			return
 		}
+		defer res.Body.Close()
 		if res.StatusCode != http.StatusOK {
 			log.Errorf("Failed to watch services: %d", res.StatusCode)
 			return
@@ -464,6 +466,7 @@ func (kd *Discovery) addService(service *Service) *config.TargetGroup {
 		log.Errorf("Error getting service endpoints: %s", err)
 		return nil
 	}
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		log.Errorf("Failed to get service endpoints: %d", res.StatusCode)
 		return nil
@@ -536,6 +539,7 @@ func (kd *Discovery) watchServiceEndpoints(events chan interface{}, done <-chan 
 			log.Errorf("Failed to watch service endpoints: %s", err)
 			return
 		}
+		defer res.Body.Close()
 		if res.StatusCode != http.StatusOK {
 			log.Errorf("Failed to watch service endpoints: %d", res.StatusCode)
 			return
@@ -574,7 +578,7 @@ func (kd *Discovery) updateServiceEndpoints(endpoints *Endpoints, eventType Even
 
 func newKubernetesHTTPClient(conf *config.KubernetesSDConfig) (*http.Client, error) {
 	bearerTokenFile := conf.BearerTokenFile
-	caFile := conf.CAFile
+	caFile := conf.TLSConfig.CAFile
 	if conf.InCluster {
 		if len(bearerTokenFile) == 0 {
 			bearerTokenFile = serviceAccountToken
@@ -582,46 +586,31 @@ func newKubernetesHTTPClient(conf *config.KubernetesSDConfig) (*http.Client, err
 		if len(caFile) == 0 {
 			// With recent versions, the CA certificate is provided as a token
 			// but we need to handle older versions too. In this case, don't
-			// set the CAFile & the configuration will have to use Insecure.
+			// set the CAFile & the configuration will have to use InsecureSkipVerify.
 			if _, err := os.Stat(serviceAccountCACert); err == nil {
 				caFile = serviceAccountCACert
 			}
 		}
 	}
 
-	tlsConfig := &tls.Config{InsecureSkipVerify: conf.Insecure}
-
-	// Load client cert if specified.
-	if len(conf.CertFile) > 0 && len(conf.KeyFile) > 0 {
-		cert, err := tls.LoadX509KeyPair(conf.CertFile, conf.KeyFile)
-		if err != nil {
-			return nil, err
-		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
+	tlsOpts := httputil.TLSOptions{
+		InsecureSkipVerify: conf.TLSConfig.InsecureSkipVerify,
+		CAFile:             caFile,
+		CertFile:           conf.TLSConfig.CertFile,
+		KeyFile:            conf.TLSConfig.KeyFile,
+	}
+	tlsConfig, err := httputil.NewTLSConfig(tlsOpts)
+	if err != nil {
+		return nil, err
 	}
 
-	caCertPool := x509.NewCertPool()
-	if len(caFile) > 0 {
-		// Load CA cert.
-		caCert, err := ioutil.ReadFile(caFile)
-		if err != nil {
-			return nil, err
-		}
-		caCertPool.AppendCertsFromPEM(caCert)
-	}
-	tlsConfig.RootCAs = caCertPool
-
-	tlsConfig.BuildNameToCertificate()
-
-	tr := &http.Transport{
+	var rt http.RoundTripper = &http.Transport{
 		Dial: func(netw, addr string) (c net.Conn, err error) {
 			c, err = net.DialTimeout(netw, addr, time.Duration(conf.RequestTimeout))
 			return
 		},
+		TLSClientConfig: tlsConfig,
 	}
-	tr.TLSClientConfig = tlsConfig
-	var rt http.RoundTripper
-	rt = tr
 
 	bearerToken, err := ioutil.ReadFile(bearerTokenFile)
 	if err != nil {

@@ -518,11 +518,12 @@ func (s *memorySeriesStorage) DropMetricsForFingerprints(fps ...model.Fingerprin
 			s.fpToSeries.del(fp)
 			s.numSeries.Dec()
 			s.persistence.unindexMetric(fp, series.metric)
-			if _, err := s.persistence.deleteSeriesFile(fp); err != nil {
-				log.Errorf("Error deleting series file for %v: %v", fp, err)
-			}
 		} else if err := s.persistence.purgeArchivedMetric(fp); err != nil {
 			log.Errorf("Error purging metric with fingerprint %v: %v", fp, err)
+		}
+		// Attempt to delete series file in any case.
+		if _, err := s.persistence.deleteSeriesFile(fp); err != nil {
+			log.Errorf("Error deleting series file for %v: %v", fp, err)
 		}
 
 		s.fpLocker.Unlock(fp)
@@ -875,8 +876,12 @@ loop:
 		case <-s.loopStopping:
 			break loop
 		case <-checkpointTimer.C:
-			s.persistence.checkpointSeriesMapAndHeads(s.fpToSeries, s.fpLocker)
-			dirtySeriesCount = 0
+			err := s.persistence.checkpointSeriesMapAndHeads(s.fpToSeries, s.fpLocker)
+			if err != nil {
+				log.Errorln("Error while checkpointing:", err)
+			} else {
+				dirtySeriesCount = 0
+			}
 			checkpointTimer.Reset(s.checkpointInterval)
 		case fp := <-memoryFingerprints:
 			if s.maintainMemorySeries(fp, model.Now().Add(-s.dropAfter)) {
@@ -887,7 +892,7 @@ loop:
 				// while in a situation like that, where we are clearly lacking speed of disk
 				// maintenance, the best we can do for crash recovery is to persist chunks as
 				// quickly as possible. So only checkpoint if the storage is not in "graceful
-				// degratadion mode".
+				// degradation mode".
 				if dirtySeriesCount >= s.checkpointDirtySeriesLimit && !s.isDegraded() {
 					checkpointTimer.Reset(0)
 				}
